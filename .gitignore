@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Build outputs
+dist
+dist-ssr
+*.local
+
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# Browser verification artifacts
+.playwright-cli
+playwright-report
+test-results
