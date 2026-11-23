@@ -10,6 +10,101 @@
  */
 
 /**
+ * Checks whether an IPv4 or IPv6 host belongs to private, loopback, link-local,
+ * multicast, carrier-grade NAT, or reserved network address spaces (SSRF protection).
+ */
+export function isPrivateOrReservedHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().trim();
+
+  // Strip IPv6 brackets if present e.g. [::1] -> ::1
+  const cleanHost = host.startsWith('[') && host.endsWith(']')
+    ? host.slice(1, -1)
+    : host;
+
+  // Localhost names
+  if (
+    cleanHost === 'localhost' ||
+    cleanHost.endsWith('.localhost') ||
+    cleanHost === 'localhost.localdomain'
+  ) {
+    return true;
+  }
+
+  // Common internal TLDs or single-label hostnames
+  if (!cleanHost.includes('.') && !cleanHost.includes(':')) {
+    return true;
+  }
+
+  if (
+    cleanHost.endsWith('.local') ||
+    cleanHost.endsWith('.internal') ||
+    cleanHost.endsWith('.lan') ||
+    cleanHost.endsWith('.home') ||
+    cleanHost.endsWith('.corp') ||
+    cleanHost.endsWith('.test') ||
+    cleanHost.endsWith('.example') ||
+    cleanHost.endsWith('.invalid')
+  ) {
+    return true;
+  }
+
+  // IPv6 checks
+  if (cleanHost.includes(':')) {
+    // ::1 loopback
+    if (cleanHost === '::1' || cleanHost === '0:0:0:0:0:0:0:1') return true;
+    // :: unspecified
+    if (cleanHost === '::' || cleanHost === '0:0:0:0:0:0:0:0') return true;
+    // Link-local: fe80::/10 (fe80 to febf)
+    if (/^fe[89ab][0-9a-f]:/i.test(cleanHost)) return true;
+    // Unique local: fc00::/7 (fc00 to fdff)
+    if (/^f[cd][0-9a-f]{2}:/i.test(cleanHost)) return true;
+    // IPv4-mapped IPv6: ::ffff:x.x.x.x
+    if (cleanHost.startsWith('::ffff:')) {
+      const v4Part = cleanHost.slice('::ffff:'.length);
+      return isPrivateOrReservedHost(v4Part);
+    }
+  }
+
+  // IPv4 checks
+  const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(cleanHost);
+  if (ipv4Match) {
+    const [, o1, o2, o3, o4] = ipv4Match.map(Number);
+    if (o1 > 255 || o2 > 255 || o3 > 255 || o4 > 255) return true;
+
+    // 0.0.0.0/8 (Current network / default route)
+    if (o1 === 0) return true;
+    // 10.0.0.0/8 (Private)
+    if (o1 === 10) return true;
+    // 100.64.0.0/10 (Shared address space / CGNAT)
+    if (o1 === 100 && o2 >= 64 && o2 <= 127) return true;
+    // 127.0.0.0/8 (Loopback)
+    if (o1 === 127) return true;
+    // 169.254.0.0/16 (Link-local, cloud metadata)
+    if (o1 === 169 && o2 === 254) return true;
+    // 172.16.0.0/12 (Private 172.16.0.0 - 172.31.255.255)
+    if (o1 === 172 && o2 >= 16 && o2 <= 31) return true;
+    // 192.0.0.0/24 (IETF Protocol Assignments)
+    if (o1 === 192 && o2 === 0 && o3 === 0) return true;
+    // 192.0.2.0/24 (Documentation - TEST-NET-1)
+    if (o1 === 192 && o2 === 0 && o3 === 2) return true;
+    // 192.168.0.0/16 (Private)
+    if (o1 === 192 && o2 === 168) return true;
+    // 198.18.0.0/15 (Benchmarking)
+    if (o1 === 198 && (o2 === 18 || o2 === 19)) return true;
+    // 198.51.100.0/24 (Documentation - TEST-NET-2)
+    if (o1 === 198 && o2 === 51 && o3 === 100) return true;
+    // 203.0.113.0/24 (Documentation - TEST-NET-3)
+    if (o1 === 203 && o2 === 0 && o3 === 113) return true;
+    // 224.0.0.0/4 (Multicast 224.0.0.0 - 239.255.255.255)
+    if (o1 >= 224 && o1 <= 239) return true;
+    // 240.0.0.0/4 (Reserved 240.0.0.0 - 255.255.255.254)
+    if (o1 >= 240) return true;
+  }
+
+  return false;
+}
+
+/**
  * Validates whether a URL is a safe, root-relative local asset path (e.g. /sample.jpg, /assets/cover.png).
  * Strictly rejects protocol-relative paths (//evil.com), slash-backslash variants (/\evil.com),
  * backslashes, control characters, and path traversals that escape root.
@@ -31,6 +126,17 @@ export function isLocalAssetUrl(rawUrl: string | null | undefined): boolean {
 
   // Reject control characters or whitespace
   if (/[\x00-\x1F\x7F\s]/.test(trimmed)) {
+    return false;
+  }
+
+  // Reject path traversal segments like /../ or /./
+  if (
+    trimmed === '/..' ||
+    trimmed.startsWith('/../') ||
+    trimmed.includes('/../') ||
+    trimmed.endsWith('/..') ||
+    trimmed.includes('/./')
+  ) {
     return false;
   }
 
@@ -135,8 +241,10 @@ export function isItchIoUrl(rawUrl: string | null | undefined): boolean {
 
     if (host.endsWith('.itch.io')) {
       const subdomain = host.slice(0, -'.itch.io'.length);
+      // Reject nested subdomains e.g. sub.creator.itch.io
+      if (subdomain.includes('.')) return false;
       // Valid itch.io subdomain: 1-63 alphanumeric/hyphens/underscores, not starting/ending with hyphen
-      return /^[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?$/.test(subdomain);
+      return /^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$/.test(subdomain);
     }
 
     return false;
@@ -146,15 +254,21 @@ export function isItchIoUrl(rawUrl: string | null | undefined): boolean {
 }
 
 /**
+ * Recognized image file extensions for local asset images.
+ */
+const SAFE_IMAGE_EXTENSION_REGEX = /\.(jpe?g|png|webp|svg|gif|avif|ico)(\?.*)?$/i;
+
+/**
  * Validates an image URL (for cover artwork, screenshots, avatars).
  * Allows:
- *   - Safe local asset paths (e.g. /sample.jpg, /assets/cover.png)
- *   - Strict HTTPS URLs with no credentials or non-standard ports
+ *   - Safe local asset paths pointing to recognized image formats (e.g. /sample.jpg, /assets/cover.png)
+ *   - Strict HTTPS URLs with no credentials, standard ports, and public, non-private hosts
  * Rejects:
  *   - Protocol-relative (//evil.com) and slash-backslash (/\evil.com) URLs
  *   - Plain http: or unsafe schemes (javascript:, data:, file:)
  *   - Credentials or non-standard ports
- *   - Localhost / private IP addresses
+ *   - Localhost, link-local, loopback, private, and reserved IP addresses (SSRF defense)
+ *   - Arbitrary non-image local paths (e.g. /, /index.html, /package.json)
  */
 export function isSafeImageUrl(rawUrl: string | null | undefined): boolean {
   if (!rawUrl || typeof rawUrl !== 'string') return false;
@@ -162,7 +276,17 @@ export function isSafeImageUrl(rawUrl: string | null | undefined): boolean {
   if (!trimmed) return false;
 
   if (isLocalAssetUrl(trimmed)) {
-    return true;
+    // Local asset must have a recognized image file extension or reside under /assets/ or /brand/
+    const pathWithoutQuery = trimmed.split('?')[0].split('#')[0];
+    if (
+      SAFE_IMAGE_EXTENSION_REGEX.test(pathWithoutQuery) ||
+      pathWithoutQuery.startsWith('/assets/') ||
+      pathWithoutQuery.startsWith('/brand/') ||
+      pathWithoutQuery === '/favicon.svg'
+    ) {
+      return true;
+    }
+    return false;
   }
 
   if (!isStrictHttpsUrl(trimmed)) {
@@ -171,15 +295,7 @@ export function isSafeImageUrl(rawUrl: string | null | undefined): boolean {
 
   try {
     const parsed = new URL(trimmed);
-    const host = parsed.hostname.toLowerCase();
-    if (
-      host === 'localhost' ||
-      host === '127.0.0.1' ||
-      host === '::1' ||
-      host.startsWith('192.168.') ||
-      host.startsWith('10.') ||
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
-    ) {
+    if (isPrivateOrReservedHost(parsed.hostname)) {
       return false;
     }
 

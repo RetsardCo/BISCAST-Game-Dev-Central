@@ -18,7 +18,7 @@ Remediation was executed in strict adherence to project constraints:
 1. **Preserved Core Architecture:** React 19.1.0, TypeScript 5.8.3, Vite 6.4.6, Tailwind CSS 4.1.7, React Router 7.6.1, Lucide React.
 2. **Strict Stack Boundary:** Zero Firebase/Firestore dependencies exist; Supabase has **not** been provisioned; authentication remains untouched.
 3. **No Uncommitted Data Loss:** All existing code, sample entities, and mock stores were preserved intact.
-4. **Hardened Security & Routing:** Closed the dead-code validation loophole (`isItchIoUrl`), patched protocol-relative and slash-backslash URL normalization bypasses, removed public exposure of internal system prompts in `public/assets/aistudio/`, added Cloudflare Pages SPA rewrite rules, and implemented full WAI-ARIA modal dialog focus management.
+4. **Hardened Security & Routing:** Closed the dead-code validation loophole (`isItchIoUrl`), patched protocol-relative and slash-backslash URL normalization bypasses, hardened SSRF/private IP validation across image endpoints, prevented non-image path abuse on local assets, removed public exposure of internal system prompts in `public/assets/aistudio/`, added Cloudflare Pages SPA rewrite rules, and implemented full WAI-ARIA modal dialog focus management.
 
 ---
 
@@ -32,12 +32,12 @@ Remediation was executed in strict adherence to project constraints:
 | **DEF-04** | Low | Monogram Placeholder Logo | **DEFERRED** | Deferred pending institutional authorization (TBD-02). Inventing unapproved institutional emblems is prohibited. |
 | **DEF-05** | Low | Fragile `slugifyTitle` | **FIXED** | `slugifyTitle` in `src/lib/filters.ts` was enhanced with fallback ID and default slug handling (`'untitled-project'`) to prevent empty strings on symbol-only inputs. |
 | **DEF-06** | Informational | Documentation Duplication | **FIXED** | Removed hashed duplicates from `public/assets/aistudio/` and unified all 34 canonical specifications and engineering runbooks under `docs/`. |
-| **DEF-07** | High | Dead Code in itch.io URL Validation | **FIXED** | `validateGameSubmission` in `src/lib/validation.ts` now calls `isItchIoUrl`; `isItchIoUrl` in `src/lib/urlSafety.ts` strictly validates HTTPS protocol, subdomains, and rejects credentials/ports/spoofs; `GameDetailPage.tsx` and `AdminModerationPage.tsx` hardened. |
-| **DEF-08** | High | Protocol-Relative (`//`) & Slash-Backslash (`/\`) URL Bypass | **FIXED** | `isSafeHttpUrl`, `isLocalAssetUrl`, and `isSafeImageUrl` in `src/lib/urlSafety.ts` were hardened using WHATWG URL base resolution to reject `//`, `/\`, backslashes, arbitrary paths, and credentials; `MediaImage.tsx` validates image sources; comprehensive regression tests added. |
+| **DEF-07** | High | Dead Code in itch.io URL Validation | **FIXED** | `validateGameSubmission` in `src/lib/validation.ts` now calls `isItchIoUrl`; `isItchIoUrl` in `src/lib/urlSafety.ts` strictly validates HTTPS protocol, single-level subdomains, rejects leading/trailing hyphens, credentials, ports, and phishing spoofs; `GameDetailPage.tsx` and `AdminModerationPage.tsx` hardened. |
+| **DEF-08** | High | Protocol-Relative (`//`) & Slash-Backslash (`/\`) URL Bypass | **FIXED** | `isSafeHttpUrl`, `isLocalAssetUrl`, and `isSafeImageUrl` in `src/lib/urlSafety.ts` were hardened using WHATWG URL base resolution to reject `//`, `/\`, backslashes, arbitrary non-image paths, directory traversal (`/../`), and comprehensive SSRF/private IP ranges (`127.0.0.0/8`, `[::1]`, `169.254.0.0/16`, `0.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `[fe80::]`, single-label/internal domains); `MediaImage.tsx` validates image sources; comprehensive regression tests added. |
 | **DEF-09** | Medium | Untracked Documentation & Runbooks | **FIXED** | All 33 previously untracked specifications and 14 operational runbooks were committed to Git under `docs/`. |
 | **DEF-10** | Medium | Public Static Asset Disclosure | **FIXED** | Removed `public/assets/aistudio/` entirely from `public/`. Verified that Vite production build no longer copies markdown files to `dist/`. |
 | **DEF-11** | Medium | Missing Cloudflare Pages SPA Rewrite | **FIXED** | Created `public/_redirects` containing `/* /index.html 200`. Verified copied to `dist/_redirects` on build. |
-| **DEF-12** | Medium | Modal Dialog Accessibility (a11y) Violations | **FIXED** | `src/components/ui/Dialog.tsx` now enforces initial focus placement, focus trapping (`Tab` and `Shift+Tab`), trigger focus restoration, body scroll locking (`overflow: hidden`), and `aria-describedby` wiring. |
+| **DEF-12** | Medium | Modal Dialog Accessibility (a11y) Violations | **FIXED** | Implemented `src/lib/dialogFocus.ts` and hardened `src/components/ui/Dialog.tsx`. Enforces initial focus placement, bidirectional focus trapping (`Tab` and `Shift+Tab`), container/outside focus boundary trapping, hidden input exclusion, trigger focus restoration, body scroll locking (`overflow: hidden`), and `aria-describedby` wiring. |
 | **DEF-13** | Low | Missing Favicon & Vite Host Header Bypass | **FIXED** | Added `public/favicon.svg` matching BSEMC branding, added `<link rel="icon">` to `index.html`, and removed `allowedHosts: true` from `vite.config.ts`. |
 
 ---
@@ -46,30 +46,35 @@ Remediation was executed in strict adherence to project constraints:
 
 ### 3.1 Security & URL Hardening
 - **`src/lib/urlSafety.ts`**:
-  - Implemented `isLocalAssetUrl(rawUrl)`: Validates root-relative paths via WHATWG base resolution (`https://biscast-internal.invalid`), rejecting `//`, `/\`, backslashes, control characters, credentials, and non-standard ports.
+  - Implemented `isLocalAssetUrl(rawUrl)`: Validates root-relative paths via WHATWG base resolution (`https://biscast-internal.invalid`), rejecting `//`, `/\`, backslashes, control characters, credentials, non-standard ports, and path traversal segments (`/../`, `/./`).
   - Hardened `isStrictHttpsUrl(rawUrl)`: Enforces `https:` scheme, rejects protocol-relative/backslash prefixes, rejects credentials (`user:pass@host`), and rejects non-standard ports.
   - Hardened `isSafeHttpUrl(rawUrl)`: Disallows plain `http:`; allows strictly valid local assets and valid HTTPS URLs.
-  - Hardened `isItchIoUrl(rawUrl)`: Restricts host to `itch.io` or single-level creator subdomains (`^[a-z0-9](?:[a-z0-9-_]{0,61}[a-z0-9])?\.itch\.io$`); rejects nested subdomains, credentials, ports, and arbitrary domains.
-  - Added `isSafeImageUrl(rawUrl)`: Validates image source URLs, rejecting protocol-relative bypasses, credentials, non-standard ports, and private/loopback IP addresses (`localhost`, `127.0.0.1`, `192.168.*`, `10.*`, `172.16-31.*`).
+  - Hardened `isItchIoUrl(rawUrl)`: Restricts host to `itch.io` or single-level creator subdomains (`^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.itch\.io$`); rejects nested subdomains, leading/trailing hyphens, credentials, ports, and arbitrary domains. Fixed character class regex to avoid unescaped ambiguous hyphens.
+  - Implemented `isPrivateOrReservedHost(hostname)`: Comprehensive SSRF protection blocking IPv4 loopback (`127.0.0.0/8`), IPv6 loopback (`[::1]`, `::1`), link-local / cloud metadata (`169.254.0.0/16`), current network (`0.0.0.0/8`), private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), CGNAT (`100.64.0.0/10`), IPv6 link-local (`[fe80:...`), unique local (`[fc...`, `[fd...`), IPv4-mapped IPv6 (`[::ffff:...`), single-label hostnames without dots (e.g. `intranet`, `metadata`), and internal TLDs (`.local`, `.internal`, `.lan`, `.home`, `.corp`).
+  - Hardened `isSafeImageUrl(rawUrl)`: Validates image source URLs. For local assets, enforces recognized image extensions (`.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.gif`, `.avif`, `.ico`) or `/assets/` prefix, rejecting arbitrary paths (e.g. `/`, `/index.html`, `/package.json`). For remote assets, verifies strict HTTPS and non-private host status.
 - **`src/lib/validation.ts`**:
   - Replaced dead check `isStrictHttpsUrl(draft.itch_url)` with `isItchIoUrl(draft.itch_url)`.
   - Replaced `isSafeHttpUrl(draft.cover_image_url)` with `isSafeImageUrl(draft.cover_image_url)`.
 - **`src/components/ui/MediaImage.tsx`**:
-  - Added source validation `isSafeImageUrl(src)`. If an untrusted, protocol-relative, or malformed URL is supplied, the component displays the styled fallback artwork surface instead of requesting an unsafe external asset.
+  - Added source validation `isSafeImageUrl(src)`. If an untrusted, protocol-relative, or malformed URL is supplied, the component displays the styled fallback artwork surface instead of requesting an unsafe external asset. Configured `referrerPolicy="no-referrer"`.
 - **`src/pages/GameDetailPage.tsx`**:
   - Swapped generic `isSafeHttpUrl(game.itch_url)` with `isItchIoUrl(game.itch_url)` for the "Open on itch.io" external launch button.
 - **`src/pages/AdminModerationPage.tsx`**:
   - Added safe inspection display for `game.itch_url` in the moderation queue card. Reviewers can now inspect the submitted link directly with security status indicators.
 
 ### 3.2 Accessibility & Dialog Hardening
+- **`src/lib/dialogFocus.ts`**:
+  - New dedicated module defining `FOCUSABLE_SELECTOR`, `getFocusableElements`, `getNextTrappedElement`, and `calculateNextTrapFocus`.
+  - `FOCUSABLE_SELECTOR` excludes hidden inputs (`input:not([type="hidden"])`), disabled controls, and elements marked `aria-hidden="true"`.
+  - `getNextTrappedElement` handles forward wrap from last element to first, backward wrap from first element to last, container focus, and focus returning from outside the dialog boundary.
 - **`src/components/ui/Dialog.tsx`**:
-  - Added `triggerRef` to remember the active element before opening and restore focus upon close.
+  - Integrated `getFocusableElements` and `getNextTrappedElement` from `dialogFocus.ts`.
+  - Added `triggerRef` to remember the active element before opening and restore focus upon close (verifying `document.contains(triggerRef.current)`).
   - Added background body scroll lock (`document.body.style.overflow = 'hidden'`) during modal mount, restoring prior overflow state on unmount.
   - Added initial focus placement via `requestAnimationFrame` to the first focusable element (or dialog container).
-  - Added full keyboard focus trapping: pressing `Tab` on the last element wraps to the first; pressing `Shift+Tab` on the first element wraps to the last.
   - Connected `aria-describedby={description ? descId : undefined}` using React `useId()`.
 - **`src/lib/dialogA11y.test.ts`**:
-  - Created a dedicated unit test suite asserting focus trap forward/backward wrapping, Escape key handling, and ARIA attribute associations.
+  - Unit tests asserting focus trap forward/backward wrapping, container focus recovery, DOM node next trapped element calculations, `FOCUSABLE_SELECTOR` exclusions, Escape key handling, and ARIA attribute associations.
 
 ### 3.3 Routing, Asset Disclosure & Deployment
 - **`public/_redirects`**:
@@ -126,6 +131,9 @@ All tests executed via Node.js native test runner (`node:test`, `node:assert/str
 | **DEF-08: Slash-Backslash Bypass** | `/\\evil.com` | `false` | `false` | Passed |
 | **DEF-08: Slash-Backslash Path** | `/\\evil.com/path` | `false` | `false` | Passed |
 | **DEF-08: Embedded Backslash** | `/assets\\evil.com` | `false` | `false` | Passed |
+| **DEF-08: Directory Traversal** | `/../etc/passwd` | `false` | `false` | Passed |
+| **DEF-08: Nested Traversal** | `/assets/../../something` | `false` | `false` | Passed |
+| **DEF-08: Relative Dot Segment** | `/./assets/sample.jpg` | `false` | `false` | Passed |
 | **Plain HTTP External Scheme** | `http://insecure.example.com` | `false` | `false` | Passed |
 | **Credentials in URL** | `https://user:pass@evil.com` | `false` | `false` | Passed |
 | **Safe Local Asset** | `/sample.jpg` | `true` | `true` | Passed |
@@ -133,17 +141,35 @@ All tests executed via Node.js native test runner (`node:test`, `node:assert/str
 | **Safe Strict HTTPS URL** | `https://example.com/demo` | `true` | `true` | Passed |
 | **DEF-07: Valid Root Itch URL** | `https://itch.io` | `true` | `true` | Passed |
 | **DEF-07: Valid Subdomain Itch** | `https://sample-dev.itch.io/lantern-depths` | `true` | `true` | Passed |
-| **DEF-07: Valid Underscore Subdomain**| `https://creator_team.itch.io/game` | `true` | `true` | Passed |
+| **DEF-07: Valid Subdomain Itch** | `https://creator_team.itch.io/game` | `true` | `true` | Passed |
 | **DEF-07: Phishing / Arbitrary HTTPS**| `https://evil-phishing.com/login` | `false` | `false` | Passed |
 | **DEF-07: Hostname Prefix Spoof** | `https://evil-itch.io.example.com/game` | `false` | `false` | Passed |
 | **DEF-07: Suffix Spoof** | `https://itch.io.evil.com` | `false` | `false` | Passed |
 | **DEF-07: Nested Subdomain** | `https://nested.sub.itch.io/game` | `false` | `false` | Passed |
+| **DEF-07: Subdomain Leading Dash** | `https://-leading-dash.itch.io/game` | `false` | `false` | Passed |
+| **DEF-07: Subdomain Trailing Dash** | `https://trailing-dash-.itch.io/game` | `false` | `false` | Passed |
+| **DEF-07: Trailing Dot FQDN** | `https://sample.itch.io./game` | `false` | `false` | Passed |
 | **DEF-07: Credentials on Itch URL** | `https://user:password@sample.itch.io/game`| `false` | `false` | Passed |
 | **DEF-07: Non-standard Port** | `https://sample.itch.io:8080/game` | `false` | `false` | Passed |
 | **DEF-08 Image: Protocol-Relative** | `//evil-tracker.com/pixel.png` | `false` | `false` | Passed |
 | **DEF-08 Image: Slash-Backslash** | `/\\evil-tracker.com/pixel.png` | `false` | `false` | Passed |
 | **DEF-08 Image: Localhost SSRF** | `https://localhost/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: IPv4 Loopback 127.0.0.1** | `https://127.0.0.1/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: IPv4 Loopback 127.0.0.2** | `https://127.0.0.2/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: IPv6 Loopback [::1]** | `https://[::1]/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: Link-Local Metadata** | `https://169.254.169.254/meta-data` | `false` | `false` | Passed |
+| **DEF-08 Image: Default Route 0.0.0.0** | `https://0.0.0.0/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: IPv6 Link-Local** | `https://[fe80::1]/exploit.png` | `false` | `false` | Passed |
 | **DEF-08 Image: Private 192.168.x** | `https://192.168.1.1/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: Private 10.x** | `https://10.0.0.1/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: Private 172.16.x** | `https://172.16.0.1/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: Single-Label Hostname** | `https://intranet/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: Internal .local TLD** | `https://test.local/exploit.png` | `false` | `false` | Passed |
+| **DEF-08 Image: Root Path as Image** | `/` | `false` | `false` | Passed |
+| **DEF-08 Image: HTML File as Image** | `/index.html` | `false` | `false` | Passed |
+| **DEF-08 Image: Package File as Image** | `/package.json` | `false` | `false` | Passed |
+| **DEF-08 Image: Arbitrary Route as Image**| `/admin` | `false` | `false` | Passed |
+| **DEF-08 Image: Valid Itch CDN** | `https://img.itch.zone/abc/cover.png` | `true` | `true` | Passed |
 | **DEF-07 Form: Phishing itch_url** | `draft.itch_url: 'https://attacker.com/login'` | `errors.itch_url` set | `errors.itch_url` set | Passed |
 | **DEF-08 Form: Protocol-Relative** | `draft.cover_image_url: '//evil.com/p.png'` | `errors.cover_image_url` set | `errors.cover_image_url` set | Passed |
 
@@ -181,22 +207,28 @@ All tests executed via Node.js native test runner (`node:test`, `node:assert/str
 ## 8. Dialog Accessibility Verification (DEF-12)
 
 1. **Focus Trap:**
+   - Implemented in `src/lib/dialogFocus.ts` via `getNextTrappedElement`.
    - Verified that `Tab` navigation on the last focusable element wraps to the first focusable element.
    - Verified that `Shift+Tab` on the first element wraps to the last focusable element.
-2. **Initial Focus & Restoration:**
-   - Initial focus moves to the first interactive element inside the modal upon mounting.
-   - Upon closing or unmounting, focus is restored to the triggering button (`triggerRef.current?.focus()`).
-3. **Background Body Scroll Lock:**
+   - Verified that if focus is on the container or backdrop, `Tab` moves focus to the first element and `Shift+Tab` moves focus to the last element.
+   - Verified that if focus escapes outside the dialog container, `Tab` traps it back to the first element and `Shift+Tab` traps it back to the last element.
+2. **Focusable Element Filtering:**
+   - `FOCUSABLE_SELECTOR` explicitly excludes `input[type="hidden"]`, disabled elements, and elements with `aria-hidden="true"`.
+   - `getFocusableElements` additionally filters elements with inline/computed `display: none` or `visibility: hidden`.
+3. **Initial Focus & Restoration:**
+   - Initial focus moves to the first interactive element inside the modal upon mounting via `requestAnimationFrame`.
+   - Upon closing or unmounting, focus is restored to the triggering button (`triggerRef.current?.focus()`), verifying `document.contains(triggerRef.current)`.
+4. **Background Body Scroll Lock:**
    - When modal is open, `document.body.style.overflow = 'hidden'` is applied.
    - When modal is closed, original overflow style is restored.
-4. **Keyboard Interaction:**
+5. **Keyboard Interaction:**
    - Pressing `Escape` calls `onClose()` and prevents event bubbling.
-5. **ARIA Associations:**
+6. **ARIA Associations:**
    - Root container provides `role="dialog"`, `aria-modal="true"`.
    - Heading bound via `aria-labelledby={titleId}` using React `useId()`.
    - Optional description bound via `aria-describedby={descId}`.
-6. **Automated Unit Tests:**
-   - 3 automated test suites in `src/lib/dialogA11y.test.ts` pass cleanly.
+7. **Automated Unit Tests:**
+   - 5 automated test suites in `src/lib/dialogA11y.test.ts` pass cleanly.
 
 ---
 
@@ -214,22 +246,24 @@ Exit code: 0 (Clean, 0 diagnostic errors)
 $ npm test
 > tsx --test src/lib/*.test.ts
 
-✔ urlSafety rejects unsafe schemes and validates https / itch.io / YouTube URLs (2.0003ms)
-✔ public filter excludes pending games and matches developer search (0.6093ms)
-✔ submission validation enforces required fields, safe URLs, and rights confirmation (0.8506ms)
-✔ moderation transition requires feedback on reject and logs audit entry on approve (0.9287ms)
-✔ voting logic prevents duplicate votes and blocks closed competitions (1.5706ms)
-✔ dialog accessibility: focus trap wraps backward and forward (1.2511ms)
-✔ dialog accessibility: escape key triggers close callback (0.3967ms)
-✔ dialog accessibility: ARIA associations and semantics (0.244ms)
-ℹ tests 8
+✔ urlSafety rejects unsafe schemes and validates https / itch.io / YouTube URLs (3.0947ms)
+✔ public filter excludes pending games and matches developer search (0.901ms)
+✔ submission validation enforces required fields, safe URLs, and rights confirmation (0.6771ms)
+✔ moderation transition requires feedback on reject and logs audit entry on approve (0.2373ms)
+✔ voting logic prevents duplicate votes and blocks closed competitions (1.0345ms)
+✔ dialog accessibility: focus trap wraps backward and forward (1.2307ms)
+✔ dialog accessibility: DOM node getNextTrappedElement traps focus (0.3912ms)
+✔ dialog accessibility: FOCUSABLE_SELECTOR excludes hidden inputs and aria-hidden elements (0.2473ms)
+✔ dialog accessibility: escape key triggers close callback (0.2656ms)
+✔ dialog accessibility: ARIA associations and semantics (0.2059ms)
+ℹ tests 10
 ℹ suites 0
-ℹ pass 8
+ℹ pass 10
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 238.4459
+ℹ duration_ms 211.3896
 ```
 
 ### 9.3 Vite Production Bundle Execution
@@ -239,7 +273,7 @@ $ npm run build
 
 vite v6.4.6 building for production...
 transforming...
-✓ 1683 modules transformed.
+✓ 1684 modules transformed.
 rendering chunks...
 computing gzip size...
 dist/index.html                                                          1.58 kB │ gzip:   0.72 kB
@@ -249,8 +283,8 @@ dist/assets/sample_game_coastal_courier_1795358228364-CnGmUr0N.jpg     784.46 kB
 dist/assets/sample_game_lantern_depths_1795358242269-BL50w9OM.jpg      926.58 kB
 dist/assets/sample_game_clockwork_hearth_1795358229904-CjQB8lvr.jpg  1,157.59 kB
 dist/assets/index-CEYy6jQa.css                                          38.01 kB │ gzip:   7.73 kB
-dist/assets/index-BEIy-pAs.js                                          451.78 kB │ gzip: 125.75 kB
-✓ built in 6.24s
+dist/assets/index-CIl1Ajgh.js                                          453.45 kB │ gzip: 126.37 kB
+✓ built in 4.23s
 ```
 
 ---

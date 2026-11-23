@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
+import { getFocusableElements, getNextTrappedElement } from '../../lib/dialogFocus';
 
 export interface DialogProps {
   open: boolean;
@@ -8,9 +9,6 @@ export interface DialogProps {
   description?: string;
   children: React.ReactNode;
 }
-
-const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Dialog({ open, onClose, title, description, children }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -32,7 +30,7 @@ export function Dialog({ open, onClose, title, description, children }: DialogPr
     // Move initial focus into dialog
     const rafId = requestAnimationFrame(() => {
       if (!dialogRef.current) return;
-      const focusables = dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      const focusables = getFocusableElements(dialogRef.current);
       if (focusables.length > 0) {
         focusables[0].focus();
       } else {
@@ -44,7 +42,9 @@ export function Dialog({ open, onClose, title, description, children }: DialogPr
       cancelAnimationFrame(rafId);
       document.body.style.overflow = originalOverflow;
       if (triggerRef.current && typeof triggerRef.current.focus === 'function') {
-        triggerRef.current.focus();
+        if (document.contains(triggerRef.current)) {
+          triggerRef.current.focus();
+        }
       }
     };
   }, [open]);
@@ -62,28 +62,24 @@ export function Dialog({ open, onClose, title, description, children }: DialogPr
 
       if (event.key === 'Tab') {
         if (!dialogRef.current) return;
-        const focusables = Array.from(
-          dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
-        ).filter((el) => el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0);
+        const focusables = getFocusableElements(dialogRef.current);
 
         if (focusables.length === 0) {
           event.preventDefault();
+          dialogRef.current.focus();
           return;
         }
 
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
+        const nextTarget = getNextTrappedElement(
+          focusables,
+          document.activeElement,
+          event.shiftKey,
+          dialogRef.current
+        );
 
-        if (event.shiftKey) {
-          if (document.activeElement === first || document.activeElement === dialogRef.current) {
-            event.preventDefault();
-            last.focus();
-          }
-        } else {
-          if (document.activeElement === last) {
-            event.preventDefault();
-            first.focus();
-          }
+        if (nextTarget) {
+          event.preventDefault();
+          nextTarget.focus();
         }
       }
     };

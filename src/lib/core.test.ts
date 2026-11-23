@@ -46,6 +46,9 @@ test('urlSafety rejects unsafe schemes and validates https / itch.io / YouTube U
   assert.equal(isLocalAssetUrl('//evil.com'), false);
   assert.equal(isLocalAssetUrl('/\\evil.com'), false);
   assert.equal(isLocalAssetUrl('\\evil.com'), false);
+  assert.equal(isLocalAssetUrl('/../etc/passwd'), false);
+  assert.equal(isLocalAssetUrl('/assets/../../something'), false);
+  assert.equal(isLocalAssetUrl('/./assets/sample.jpg'), false);
   assert.equal(isLocalAssetUrl('https://example.com/sample.jpg'), false);
   assert.equal(isLocalAssetUrl(''), false);
   assert.equal(isLocalAssetUrl(null), false);
@@ -60,6 +63,9 @@ test('urlSafety rejects unsafe schemes and validates https / itch.io / YouTube U
   assert.equal(isItchIoUrl('https://itch.io.evil.com'), false);
   assert.equal(isItchIoUrl('https://notitch.io'), false);
   assert.equal(isItchIoUrl('https://nested.sub.itch.io/game'), false);
+  assert.equal(isItchIoUrl('https://-leading-dash.itch.io/game'), false);
+  assert.equal(isItchIoUrl('https://trailing-dash-.itch.io/game'), false);
+  assert.equal(isItchIoUrl('https://sample.itch.io./game'), false);
   assert.equal(isItchIoUrl('https://user:password@sample.itch.io/game'), false);
   assert.equal(isItchIoUrl('https://sample.itch.io:8080/game'), false);
   assert.equal(isItchIoUrl('http://sample.itch.io/game'), false);
@@ -68,14 +74,30 @@ test('urlSafety rejects unsafe schemes and validates https / itch.io / YouTube U
 
   // Safe image URL checks
   assert.equal(isSafeImageUrl('/sample.jpg'), true);
+  assert.equal(isSafeImageUrl('/favicon.svg'), true);
+  assert.equal(isSafeImageUrl('/assets/images/sample.jpg'), true);
   assert.equal(isSafeImageUrl('https://example.com/cover.jpg'), true);
+  assert.equal(isSafeImageUrl('https://img.itch.zone/abc/cover.png'), true);
   assert.equal(isSafeImageUrl('//evil-tracker.com/pixel.png'), false);
   assert.equal(isSafeImageUrl('/\\evil-tracker.com/pixel.png'), false);
   assert.equal(isSafeImageUrl('http://insecure.example.com/cover.jpg'), false);
   assert.equal(isSafeImageUrl('https://localhost/exploit.png'), false);
   assert.equal(isSafeImageUrl('https://127.0.0.1/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://127.0.0.2/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://[::1]/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://169.254.169.254/meta-data'), false);
+  assert.equal(isSafeImageUrl('https://0.0.0.0/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://[fe80::1]/exploit.png'), false);
   assert.equal(isSafeImageUrl('https://192.168.1.1/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://10.0.0.1/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://172.16.0.1/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://intranet/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://test.local/exploit.png'), false);
   assert.equal(isSafeImageUrl('https://user:pass@example.com/cover.jpg'), false);
+  assert.equal(isSafeImageUrl('/'), false);
+  assert.equal(isSafeImageUrl('/index.html'), false);
+  assert.equal(isSafeImageUrl('/package.json'), false);
+  assert.equal(isSafeImageUrl('/admin'), false);
 
   // YouTube checks
   assert.equal(extractYouTubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
