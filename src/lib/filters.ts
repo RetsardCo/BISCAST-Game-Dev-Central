@@ -151,11 +151,21 @@ export function filterCapstones(
   });
 }
 
-export function slugifyTitle(title: string): string {
-  return title
+export function slugifyTitle(title: string, fallbackId?: string): string {
+  const slug = title
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 64);
+  if (slug) return slug;
+  if (fallbackId && fallbackId.trim()) {
+    const cleanId = fallbackId
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return cleanId ? `project-${cleanId}` : 'project-item';
+  }
+  return 'untitled-project';
 }

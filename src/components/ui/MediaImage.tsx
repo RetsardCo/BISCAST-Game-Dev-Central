@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Gamepad2 } from 'lucide-react';
+import { isSafeImageUrl } from '../../lib/urlSafety';
 
 export interface MediaImageProps {
   src: string | null | undefined;
@@ -23,7 +24,8 @@ export function MediaImage({
   priority = false,
 }: MediaImageProps) {
   const [failed, setFailed] = useState(false);
-  const showFallback = !src || failed;
+  const isSourceSafe = src ? isSafeImageUrl(src) : false;
+  const showFallback = !src || !isSourceSafe || failed;
 
   return (
     <div

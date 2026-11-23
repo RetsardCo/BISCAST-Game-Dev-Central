@@ -97,4 +97,4 @@ See `.env.example` for placeholder frontend variables prepared for Phase 3 Supab
 
 - Design tokens and logo swap instructions: `docs/DESIGN_TOKENS.md`
 - Phase 2 Antigravity handoff report: `HANDOFF_REPORT.md`
-- Project specification package: `public/assets/aistudio/*.md`
+- Project specification package and engineering runbooks: `docs/*.md`

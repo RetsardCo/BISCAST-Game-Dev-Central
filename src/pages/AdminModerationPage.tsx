@@ -10,6 +10,7 @@ import {
 } from '../lib/formatters';
 import type { ModerationAction } from '../lib/workflows';
 import type { Announcement } from '../types/models';
+import { isItchIoUrl } from '../lib/urlSafety';
 import { Button } from '../components/ui/Button';
 import { StatusText, getGameStatusTone } from '../components/ui/StatusText';
 import { Tabs } from '../components/ui/Tabs';
@@ -210,6 +211,25 @@ export function AdminModerationPage() {
                           </li>
                         ))}
                       </ul>
+
+                      <div className="mt-4 rounded-lg border border-[#242433] bg-[#0E0E14] p-3">
+                        <p className="text-xs font-medium text-[#8E8EA6]">Submitted itch.io URL</p>
+                        {isItchIoUrl(game.itch_url) ? (
+                          <a
+                            href={game.itch_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-[#C4B5FD] hover:text-white hover:underline break-all"
+                          >
+                            <span>{game.itch_url}</span>
+                            <ArrowUpRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          </a>
+                        ) : (
+                          <p className="mt-1.5 text-xs text-[#FB7185] break-all">
+                            ⚠️ Invalid or unverified itch.io link: {game.itch_url || '(none)'}
+                          </p>
+                        )}
+                      </div>
                     </div>
 
                     <div className="lg:col-span-7">

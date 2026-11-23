@@ -4,7 +4,9 @@ import {
   extractYouTubeVideoId,
   getPrivacyEnhancedYouTubeEmbedUrl,
   isItchIoUrl,
+  isLocalAssetUrl,
   isSafeHttpUrl,
+  isSafeImageUrl,
   isStrictHttpsUrl,
 } from './urlSafety';
 import {
@@ -19,12 +21,63 @@ import { applyModerationDecision, evaluateMockVote } from './workflows';
 import type { Category, Competition, Game, GameMember, Profile } from '../types/models';
 
 test('urlSafety rejects unsafe schemes and validates https / itch.io / YouTube URLs', () => {
+  // Scheme checks
   assert.equal(isSafeHttpUrl('javascript:alert(1)'), false);
   assert.equal(isSafeHttpUrl('data:text/html,<script>alert(1)</script>'), false);
   assert.equal(isStrictHttpsUrl('http://example.com'), false);
   assert.equal(isStrictHttpsUrl('https://sample-dev.itch.io/lantern-depths'), true);
+
+  // DEF-08 Regression: Protocol-relative (//) and slash-backslash (/\) bypass prevention
+  assert.equal(isSafeHttpUrl('//evil.com'), false);
+  assert.equal(isSafeHttpUrl('//evil.com/phishing'), false);
+  assert.equal(isSafeHttpUrl('/\\evil.com'), false);
+  assert.equal(isSafeHttpUrl('/\\evil.com/path'), false);
+  assert.equal(isSafeHttpUrl('/assets\\evil.com'), false);
+  assert.equal(isSafeHttpUrl('\\evil.com'), false);
+  assert.equal(isSafeHttpUrl('http://insecure.example.com'), false);
+  assert.equal(isSafeHttpUrl('https://user:pass@evil.com'), false);
+  assert.equal(isSafeHttpUrl('/sample.jpg'), true);
+  assert.equal(isSafeHttpUrl('/assets/sample_game.jpg'), true);
+  assert.equal(isSafeHttpUrl('https://example.com/demo'), true);
+
+  // Local asset verification
+  assert.equal(isLocalAssetUrl('/sample.jpg'), true);
+  assert.equal(isLocalAssetUrl('/assets/images/sample.jpg'), true);
+  assert.equal(isLocalAssetUrl('//evil.com'), false);
+  assert.equal(isLocalAssetUrl('/\\evil.com'), false);
+  assert.equal(isLocalAssetUrl('\\evil.com'), false);
+  assert.equal(isLocalAssetUrl('https://example.com/sample.jpg'), false);
+  assert.equal(isLocalAssetUrl(''), false);
+  assert.equal(isLocalAssetUrl(null), false);
+
+  // DEF-07 Regression: itch.io URL validation & boundary checks
+  assert.equal(isItchIoUrl('https://itch.io'), true);
+  assert.equal(isItchIoUrl('https://itch.io/game-title'), true);
   assert.equal(isItchIoUrl('https://sample-dev.itch.io/lantern-depths'), true);
+  assert.equal(isItchIoUrl('https://creator_team.itch.io/game'), true);
+  assert.equal(isItchIoUrl('https://evil-phishing.com/login'), false);
   assert.equal(isItchIoUrl('https://evil-itch.io.example.com/game'), false);
+  assert.equal(isItchIoUrl('https://itch.io.evil.com'), false);
+  assert.equal(isItchIoUrl('https://notitch.io'), false);
+  assert.equal(isItchIoUrl('https://nested.sub.itch.io/game'), false);
+  assert.equal(isItchIoUrl('https://user:password@sample.itch.io/game'), false);
+  assert.equal(isItchIoUrl('https://sample.itch.io:8080/game'), false);
+  assert.equal(isItchIoUrl('http://sample.itch.io/game'), false);
+  assert.equal(isItchIoUrl('//sample.itch.io/game'), false);
+  assert.equal(isItchIoUrl('/\\sample.itch.io/game'), false);
+
+  // Safe image URL checks
+  assert.equal(isSafeImageUrl('/sample.jpg'), true);
+  assert.equal(isSafeImageUrl('https://example.com/cover.jpg'), true);
+  assert.equal(isSafeImageUrl('//evil-tracker.com/pixel.png'), false);
+  assert.equal(isSafeImageUrl('/\\evil-tracker.com/pixel.png'), false);
+  assert.equal(isSafeImageUrl('http://insecure.example.com/cover.jpg'), false);
+  assert.equal(isSafeImageUrl('https://localhost/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://127.0.0.1/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://192.168.1.1/exploit.png'), false);
+  assert.equal(isSafeImageUrl('https://user:pass@example.com/cover.jpg'), false);
+
+  // YouTube checks
   assert.equal(extractYouTubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
   assert.equal(extractYouTubeVideoId('https://youtu.be/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
   assert.equal(
@@ -137,6 +190,9 @@ test('public filter excludes pending games and matches developer search', () => 
   assert.equal(grouped.length, 1);
   assert.equal(grouped[0].academicYear, '2025-2026');
   assert.equal(slugifyTitle('Sample: Lantern Depths!'), 'sample-lantern-depths');
+  assert.equal(slugifyTitle('!!!'), 'untitled-project');
+  assert.equal(slugifyTitle('???', 'g-123'), 'project-g-123');
+  assert.equal(slugifyTitle('', 'alpha'), 'project-alpha');
 });
 
 test('submission validation enforces required fields, safe URLs, and rights confirmation', () => {
@@ -163,25 +219,57 @@ test('submission validation enforces required fields, safe URLs, and rights conf
   assert.ok(emptyErrors.trailer_url);
   assert.ok(emptyErrors.rights_confirmed);
 
-  const validErrors = validateGameSubmission({
+  const validSubmissionDraft = {
     title: 'Sample: Skyward Relay',
     short_description: 'A short atmospheric puzzle prototype built for class.',
     description:
       'Players connect wind-powered relay beacons across floating islands in this sample coursework game prototype.',
     category_ids: ['cat-2'],
-    project_type: 'class_project',
+    project_type: 'class_project' as const,
     academic_year: '2025-2026',
-    semester: '1st Semester',
+    semester: '1st Semester' as const,
     engine: 'Godot 4',
     itch_url: 'https://sample-team.itch.io/skyward-relay',
     cover_image_url: '',
     trailer_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     content_warnings: '',
-    team_members: [{ profile_id: 'prof-1', credit_role: 'developer' }],
+    team_members: [{ profile_id: 'prof-1', credit_role: 'developer' as const }],
     rights_confirmed: true,
-  });
+  };
 
+  const validErrors = validateGameSubmission(validSubmissionDraft);
   assert.equal(hasValidationErrors(validErrors), false);
+
+  // DEF-07 Regression: Phishing / arbitrary external HTTPS URL rejected as itch_url
+  const nonItchSubmission = validateGameSubmission({
+    ...validSubmissionDraft,
+    itch_url: 'https://attacker-credential-harvest.com/login',
+  });
+  assert.equal(hasValidationErrors(nonItchSubmission), true);
+  assert.ok(nonItchSubmission.itch_url);
+
+  // DEF-08 Regression: Protocol-relative (//) cover image rejected
+  const protoRelativeCover = validateGameSubmission({
+    ...validSubmissionDraft,
+    cover_image_url: '//evil-tracker.com/pixel.png',
+  });
+  assert.equal(hasValidationErrors(protoRelativeCover), true);
+  assert.ok(protoRelativeCover.cover_image_url);
+
+  // DEF-08 Regression: Slash-backslash (/\) cover image rejected
+  const slashBackslashCover = validateGameSubmission({
+    ...validSubmissionDraft,
+    cover_image_url: '/\\evil-tracker.com/pixel.png',
+  });
+  assert.equal(hasValidationErrors(slashBackslashCover), true);
+  assert.ok(slashBackslashCover.cover_image_url);
+
+  // Valid external https cover image accepted
+  const validHttpsCover = validateGameSubmission({
+    ...validSubmissionDraft,
+    cover_image_url: 'https://example.com/cover.jpg',
+  });
+  assert.equal(hasValidationErrors(validHttpsCover), false);
 });
 
 test('moderation transition requires feedback on reject and logs audit entry on approve', () => {

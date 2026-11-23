@@ -1,5 +1,5 @@
 import type { GameSubmissionDraft } from '../types/models';
-import { extractYouTubeVideoId, isSafeHttpUrl, isStrictHttpsUrl } from './urlSafety';
+import { extractYouTubeVideoId, isItchIoUrl, isSafeImageUrl } from './urlSafety';
 
 export interface ValidationErrors {
   title?: string;
@@ -41,12 +41,12 @@ export function validateGameSubmission(draft: GameSubmissionDraft): ValidationEr
     errors.academic_year = 'Use the YYYY-YYYY academic year format (e.g., 2025-2026).';
   }
 
-  if (!isStrictHttpsUrl(draft.itch_url)) {
-    errors.itch_url = 'Provide a valid https:// itch.io or approved play/demo URL.';
+  if (!isItchIoUrl(draft.itch_url)) {
+    errors.itch_url = 'Provide a valid https:// itch.io game URL (e.g., https://username.itch.io/game).';
   }
 
-  if (draft.cover_image_url.trim().length > 0 && !isSafeHttpUrl(draft.cover_image_url)) {
-    errors.cover_image_url = 'Cover image URL must use https:// (or leave blank to use a sample placeholder).';
+  if (draft.cover_image_url.trim().length > 0 && !isSafeImageUrl(draft.cover_image_url)) {
+    errors.cover_image_url = 'Cover image URL must use a safe https:// image link (or leave blank for sample art).';
   }
 
   if (draft.trailer_url.trim().length > 0 && !extractYouTubeVideoId(draft.trailer_url)) {

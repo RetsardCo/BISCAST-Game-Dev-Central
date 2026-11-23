@@ -16,7 +16,7 @@ import {
   GAME_STATUS_LABELS,
   PROJECT_TYPE_LABELS,
 } from '../lib/formatters';
-import { isSafeHttpUrl } from '../lib/urlSafety';
+import { isItchIoUrl } from '../lib/urlSafety';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { Dialog } from '../components/ui/Dialog';
 import { GameCard } from '../components/ui/GameCard';
@@ -75,7 +75,7 @@ export function GameDetailPage() {
     )
     .slice(0, 3);
 
-  const safeItchUrl = isSafeHttpUrl(game.itch_url) ? game.itch_url : null;
+  const safeItchUrl = isItchIoUrl(game.itch_url) ? game.itch_url : null;
 
   const handleReportSubmit = (event: React.FormEvent) => {
     event.preventDefault();
