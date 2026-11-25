@@ -6,7 +6,7 @@ import {
   COMPETITION_TYPE_LABELS,
   formatUtcDate,
 } from '../lib/formatters';
-import { isSafeHttpUrl } from '../lib/urlSafety';
+import { isStrictHttpsUrl } from '../lib/urlSafety';
 import { ButtonLink } from '../components/ui/Button';
 import { StatusText, getGameStatusTone } from '../components/ui/StatusText';
 import { Tabs } from '../components/ui/Tabs';
@@ -119,7 +119,7 @@ export function EventsPage() {
       ) : (
         <section className="mt-8 space-y-6" aria-label="Competitions and game jams">
           {competitions.map((comp) => {
-            const safeRegUrl = isSafeHttpUrl(comp.external_registration_url)
+            const safeRegUrl = isStrictHttpsUrl(comp.external_registration_url)
               ? comp.external_registration_url
               : null;
             return (

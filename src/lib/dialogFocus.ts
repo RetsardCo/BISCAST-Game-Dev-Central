@@ -1,5 +1,5 @@
 /**
- * Accessibility and keyboard focus trapping helpers for modal dialogs (DEF-12).
+ * Accessibility and keyboard focus trapping helpers for modal dialogs (DEF-12 & NEW-04).
  * Follows W3C WAI-ARIA Dialog (Modal) pattern:
  * - Initial focus placement
  * - Tab/Shift+Tab focus trapping within modal boundary
@@ -18,26 +18,44 @@ export const FOCUSABLE_SELECTOR = [
 
 /**
  * Returns all visible, focusable HTML elements within a container element.
+ * Respects computed styles (display: none / visibility: hidden) and ancestor hidden/inert state.
  */
 export function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
   if (!container) return [];
   const elements = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
   return elements.filter((el) => {
-    // Exclude elements with display: none or hidden attribute
-    if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') {
+    if (
+      el.hasAttribute('hidden') ||
+      el.getAttribute('aria-hidden') === 'true' ||
+      el.hasAttribute('inert')
+    ) {
       return false;
     }
-    // Check computed or inline display if available
-    if (el.style.display === 'none' || el.style.visibility === 'hidden') {
+
+    if (
+      typeof el.closest === 'function' &&
+      el.closest('[hidden], [aria-hidden="true"], [inert]')
+    ) {
       return false;
     }
-    // Filter out zero-size hidden elements unless in an unrendered test environment
+
+    const win = el.ownerDocument?.defaultView ?? (typeof window !== 'undefined' ? window : null);
+    if (win && typeof win.getComputedStyle === 'function') {
+      const computed = win.getComputedStyle(el);
+      if (computed.display === 'none' || computed.visibility === 'hidden') {
+        return false;
+      }
+    } else if (el.style?.display === 'none' || el.style?.visibility === 'hidden') {
+      return false;
+    }
+
+    // Filter out zero-size hidden elements (while allowing position: fixed elements with non-zero box)
     if (typeof el.offsetParent !== 'undefined' && typeof el.offsetWidth !== 'undefined') {
-      // In JSDOM or detached trees offsetParent is null; allow if offsetWidth not explicitly 0 with display none
       if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) {
         return false;
       }
     }
+
     return true;
   });
 }
@@ -60,7 +78,6 @@ export function getNextTrappedElement(
   const first = focusables[0];
   const last = focusables[focusables.length - 1];
 
-  // If focus is currently outside the container, or on the container itself
   const isOutside = container ? !container.contains(activeElement) : false;
   const isContainer = activeElement === container;
 
@@ -69,40 +86,95 @@ export function getNextTrappedElement(
       return last;
     }
     return null;
-  } else {
-    if (activeElement === last || isContainer || isOutside) {
-      return first;
-    }
-    return null;
   }
+
+  if (activeElement === last || isContainer || isOutside) {
+    return first;
+  }
+  return null;
 }
 
 /**
- * Pure identifier-based focus trap state resolver for unit testing and headless validation.
+ * Keyboard handler wired directly into Dialog.tsx for Escape dismissal and Tab trapping.
+ * Returns true if the event was handled and default browser handling was prevented.
  */
-export function calculateNextTrapFocus(
-  focusables: string[],
-  currentFocused: string | null,
-  isShiftTab: boolean,
-  containerId?: string | null
-): string | null {
-  if (focusables.length === 0) return containerId ?? null;
-  const first = focusables[0];
-  const last = focusables[focusables.length - 1];
-
-  const isOutside = currentFocused === null || (containerId ? currentFocused === containerId : false) || !focusables.includes(currentFocused);
-
-  if (isShiftTab) {
-    if (currentFocused === first || isOutside) {
-      return last;
-    }
-    const idx = focusables.indexOf(currentFocused);
-    return idx > 0 ? focusables[idx - 1] : last;
-  } else {
-    if (currentFocused === last || isOutside) {
-      return first;
-    }
-    const idx = focusables.indexOf(currentFocused);
-    return idx >= 0 && idx < focusables.length - 1 ? focusables[idx + 1] : first;
+export function handleDialogKeyDown(
+  event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'preventDefault'>,
+  dialogEl: HTMLElement | null,
+  onClose: () => void,
+  activeElement?: Element | null
+): boolean {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    onClose();
+    return true;
   }
+
+  if (event.key === 'Tab') {
+    if (!dialogEl) return false;
+    const focusables = getFocusableElements(dialogEl);
+
+    if (focusables.length === 0) {
+      event.preventDefault();
+      dialogEl.focus();
+      return true;
+    }
+
+    const currentActive =
+      activeElement !== undefined
+        ? activeElement
+        : typeof document !== 'undefined'
+          ? document.activeElement
+          : null;
+
+    const nextTarget = getNextTrappedElement(
+      focusables,
+      currentActive,
+      event.shiftKey,
+      dialogEl
+    );
+
+    if (nextTarget) {
+      event.preventDefault();
+      nextTarget.focus();
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Lifecycle helper wired into Dialog.tsx to lock background scroll, place initial focus inside
+ * the dialog, and restore scroll + trigger focus safely on close/unmount.
+ */
+export function setupDialogFocusAndScrollLock(
+  dialogRef: { current: HTMLElement | null },
+  doc: Document = document,
+  scheduleFrame: (cb: FrameRequestCallback) => number = requestAnimationFrame,
+  cancelFrame: (id: number) => void = cancelAnimationFrame
+): () => void {
+  const triggerEl = doc.activeElement as HTMLElement | null;
+  const originalOverflow = doc.body.style.overflow;
+  doc.body.style.overflow = 'hidden';
+
+  const rafId = scheduleFrame(() => {
+    if (!dialogRef.current) return;
+    const focusables = getFocusableElements(dialogRef.current);
+    if (focusables.length > 0) {
+      focusables[0].focus();
+    } else {
+      dialogRef.current.focus();
+    }
+  });
+
+  return () => {
+    cancelFrame(rafId);
+    doc.body.style.overflow = originalOverflow;
+    if (triggerEl && typeof triggerEl.focus === 'function') {
+      if (doc.contains(triggerEl)) {
+        triggerEl.focus();
+      }
+    }
+  };
 }
