@@ -5,6 +5,7 @@ import {
   getPrivacyEnhancedYouTubeEmbedUrl,
   isItchIoUrl,
   isLocalAssetUrl,
+  isPrivateOrReservedHost,
   isSafeHttpUrl,
   isSafeImageUrl,
   isStrictHttpsUrl,
@@ -107,6 +108,100 @@ test('urlSafety rejects unsafe schemes and validates https / itch.io / YouTube U
     'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0&modestbranding=1'
   );
   assert.equal(extractYouTubeVideoId('https://example.com/video'), null);
+});
+
+test('NEW-01 regression: IPv4-mapped IPv6, NAT64, 6to4, and reserved IPv6 hosts are blocked', () => {
+  const blockedUrls = [
+    'https://[::ffff:127.0.0.1]/exploit.png',
+    'https://[::ffff:169.254.169.254]/meta',
+    'https://[0:0:0:0:0:ffff:10.0.0.1]/x.png',
+    'https://[::ffff:7f00:1]/x.png',
+    'https://[0000:0000:0000:0000:0000:ffff:c0a8:0101]/x.png',
+    'https://[::ffff:172.16.0.1]/x.png',
+    'https://[::ffff:0.0.0.0]/x.png',
+    'https://[::ffff:100.64.0.1]/x.png',
+    'https://[64:ff9b::127.0.0.1]/x.png',
+    'https://[2002:7f00:1::]/x.png',
+    'https://[fc00::1]/x.png',
+    'https://[fd12:3456::1]/x.png',
+    'https://[ff02::1]/x.png',
+    'https://localhost./x.png',
+    'https://test.local./x.png',
+  ];
+
+  for (const url of blockedUrls) {
+    assert.equal(isSafeImageUrl(url), false, `isSafeImageUrl should reject ${url}`);
+    assert.equal(isStrictHttpsUrl(url), false, `isStrictHttpsUrl should reject ${url}`);
+  }
+
+  // Direct host helper checks
+  assert.equal(isPrivateOrReservedHost('::ffff:127.0.0.1'), true);
+  assert.equal(isPrivateOrReservedHost('[::ffff:7f00:1]'), true);
+  assert.equal(isPrivateOrReservedHost('0:0:0:0:0:ffff:10.0.0.1'), true);
+  assert.equal(isPrivateOrReservedHost('fe80::1%eth0'), true);
+  assert.equal(isPrivateOrReservedHost('::1::2'), true);
+
+  // Public IPv6 and public IPv4-mapped IPv6 remain allowed
+  assert.equal(isPrivateOrReservedHost('[2606:2800:220:1:248:1893:25c8:1946]'), false);
+  assert.equal(isPrivateOrReservedHost('[::ffff:93.184.216.34]'), false);
+  assert.equal(isSafeImageUrl('https://[2606:2800:220:1:248:1893:25c8:1946]/cover.png'), true);
+});
+
+test('NEW-02 regression: explicit local asset allowlist and strict external link separation', () => {
+  const disallowedLocalPaths = [
+    '/admin',
+    '/',
+    '/.',
+    '/..',
+    '/assets/.',
+    '/assets/..',
+    '/assets/./sample.jpg',
+    '/assets/../admin',
+    '/%2e%2e/etc/passwd',
+    '/%2e',
+    '/assets/%2e%2e/index.html',
+    '/assets/%252e%252e/sample.jpg',
+    '/assets/not-an-image.html',
+    '/assets/not-an-image.html?x=.png',
+    '/assets/app.js',
+    '/anything/random.svg',
+    '/index.html',
+    '/package.json',
+    '/src/App.tsx',
+    '/assets/.hidden.png',
+    '/assets//sample.jpg',
+    '/assets/%E0%A4%A.jpg',
+  ];
+
+  for (const path of disallowedLocalPaths) {
+    assert.equal(isLocalAssetUrl(path), false, `isLocalAssetUrl should reject ${path}`);
+    assert.equal(isSafeHttpUrl(path), false, `isSafeHttpUrl should reject ${path}`);
+    assert.equal(isSafeImageUrl(path), false, `isSafeImageUrl should reject ${path}`);
+  }
+
+  const allowedLocalPaths = [
+    '/favicon.svg',
+    '/sample.jpg',
+    '/sample2.jpg',
+    '/assets/sample_game.jpg',
+    '/assets/images/sample.jpg',
+    '/assets/sample_game_lantern_depths_1795358242269-BL50w9OM.jpg',
+    '/brand/biscast-logo.svg',
+    '/src/assets/images/sample_game_lantern_depths_1795358242269.jpg',
+    '/assets/cover.png?v=2',
+  ];
+
+  for (const path of allowedLocalPaths) {
+    assert.equal(isLocalAssetUrl(path), true, `isLocalAssetUrl should allow ${path}`);
+    assert.equal(isSafeImageUrl(path), true, `isSafeImageUrl should allow ${path}`);
+  }
+
+  assert.equal(isSafeImageUrl('/brand/logo.png'), true);
+
+  // Strict external HTTPS separation (must reject local paths/routes)
+  assert.equal(isStrictHttpsUrl('/admin'), false);
+  assert.equal(isStrictHttpsUrl('/sample.jpg'), false);
+  assert.equal(isStrictHttpsUrl('/assets/sample.jpg'), false);
 });
 
 const sampleCategories: Category[] = [
@@ -292,6 +387,36 @@ test('submission validation enforces required fields, safe URLs, and rights conf
     cover_image_url: 'https://example.com/cover.jpg',
   });
   assert.equal(hasValidationErrors(validHttpsCover), false);
+
+  // NEW-01 Regression: IPv4-mapped IPv6 local/metadata addresses rejected as cover_image_url
+  const ipv4MappedLoopbackCover = validateGameSubmission({
+    ...validSubmissionDraft,
+    cover_image_url: 'https://[::ffff:127.0.0.1]/exploit.png',
+  });
+  assert.equal(hasValidationErrors(ipv4MappedLoopbackCover), true);
+  assert.ok(ipv4MappedLoopbackCover.cover_image_url);
+
+  const ipv4MappedMetadataCover = validateGameSubmission({
+    ...validSubmissionDraft,
+    cover_image_url: 'https://[::ffff:169.254.169.254]/meta',
+  });
+  assert.equal(hasValidationErrors(ipv4MappedMetadataCover), true);
+  assert.ok(ipv4MappedMetadataCover.cover_image_url);
+
+  // NEW-02 Regression: Non-image local assets and encoded traversal paths rejected
+  const nonImageAssetCover = validateGameSubmission({
+    ...validSubmissionDraft,
+    cover_image_url: '/assets/not-an-image.html',
+  });
+  assert.equal(hasValidationErrors(nonImageAssetCover), true);
+  assert.ok(nonImageAssetCover.cover_image_url);
+
+  const encodedTraversalCover = validateGameSubmission({
+    ...validSubmissionDraft,
+    cover_image_url: '/%2e%2e/etc/passwd',
+  });
+  assert.equal(hasValidationErrors(encodedTraversalCover), true);
+  assert.ok(encodedTraversalCover.cover_image_url);
 });
 
 test('moderation transition requires feedback on reject and logs audit entry on approve', () => {

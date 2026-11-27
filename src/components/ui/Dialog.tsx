@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
-import { getFocusableElements, getNextTrappedElement } from '../../lib/dialogFocus';
+import { handleDialogKeyDown, setupDialogFocusAndScrollLock } from '../../lib/dialogFocus';
 
 export interface DialogProps {
   open: boolean;
@@ -12,80 +12,25 @@ export interface DialogProps {
 
 export function Dialog({ open, onClose, title, description, children }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descId = useId();
 
   // Scroll lock, initial focus, and focus restoration
   useEffect(() => {
     if (!open) return;
-
-    // Capture triggering element for focus restoration upon close
-    triggerRef.current = document.activeElement as HTMLElement | null;
-
-    // Lock background body scroll
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    // Move initial focus into dialog
-    const rafId = requestAnimationFrame(() => {
-      if (!dialogRef.current) return;
-      const focusables = getFocusableElements(dialogRef.current);
-      if (focusables.length > 0) {
-        focusables[0].focus();
-      } else {
-        dialogRef.current.focus();
-      }
-    });
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      document.body.style.overflow = originalOverflow;
-      if (triggerRef.current && typeof triggerRef.current.focus === 'function') {
-        if (document.contains(triggerRef.current)) {
-          triggerRef.current.focus();
-        }
-      }
-    };
+    return setupDialogFocusAndScrollLock(dialogRef);
   }, [open]);
 
   // Focus trap and Escape key listener
   useEffect(() => {
     if (!open) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-
-      if (event.key === 'Tab') {
-        if (!dialogRef.current) return;
-        const focusables = getFocusableElements(dialogRef.current);
-
-        if (focusables.length === 0) {
-          event.preventDefault();
-          dialogRef.current.focus();
-          return;
-        }
-
-        const nextTarget = getNextTrappedElement(
-          focusables,
-          document.activeElement,
-          event.shiftKey,
-          dialogRef.current
-        );
-
-        if (nextTarget) {
-          event.preventDefault();
-          nextTarget.focus();
-        }
-      }
+    const onKeyDown = (event: KeyboardEvent) => {
+      handleDialogKeyDown(event, dialogRef.current, onClose);
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, onClose]);
 
   if (!open) return null;

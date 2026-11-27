@@ -219,7 +219,7 @@ export function SubmitGamePage() {
             )}
           </div>
 
-          <fieldset>
+          <fieldset aria-describedby={errors.category_ids ? 'err-categories' : undefined}>
             <legend className="text-xs font-medium text-[#B8B8CA]">
               Genres / Categories <span className="text-[#FB7185]">*</span>
             </legend>
@@ -247,7 +247,9 @@ export function SubmitGamePage() {
               })}
             </div>
             {errors.category_ids && (
-              <p className="mt-1.5 text-xs text-[#FB7185]">{errors.category_ids}</p>
+              <p id="err-categories" className="mt-1.5 text-xs text-[#FB7185]">
+                {errors.category_ids}
+              </p>
             )}
           </fieldset>
         </section>
@@ -265,11 +267,15 @@ export function SubmitGamePage() {
                 type="text"
                 value={draft.academic_year}
                 onChange={(e) => setDraft({ ...draft, academic_year: e.target.value })}
+                aria-invalid={Boolean(errors.academic_year)}
+                aria-describedby={errors.academic_year ? 'err-year' : undefined}
                 placeholder="2025-2026"
                 className="mt-1.5 min-h-[42px] w-full rounded-lg border border-[#2E2E42] bg-[#09090D] px-3 font-mono text-sm text-white"
               />
               {errors.academic_year && (
-                <p className="mt-1 text-xs text-[#FB7185]">{errors.academic_year}</p>
+                <p id="err-year" className="mt-1 text-xs text-[#FB7185]">
+                  {errors.academic_year}
+                </p>
               )}
             </div>
 
@@ -345,11 +351,14 @@ export function SubmitGamePage() {
               value={draft.itch_url}
               onChange={(e) => setDraft({ ...draft, itch_url: e.target.value })}
               aria-invalid={Boolean(errors.itch_url)}
+              aria-describedby={errors.itch_url ? 'err-itch' : undefined}
               placeholder="https://your-team.itch.io/your-game"
               className="mt-1.5 min-h-[42px] w-full rounded-lg border border-[#2E2E42] bg-[#09090D] px-3.5 text-sm text-white placeholder-[#8E8EA6]"
             />
             {errors.itch_url && (
-              <p className="mt-1.5 text-xs text-[#FB7185]">{errors.itch_url}</p>
+              <p id="err-itch" className="mt-1.5 text-xs text-[#FB7185]">
+                {errors.itch_url}
+              </p>
             )}
           </div>
 
@@ -363,11 +372,15 @@ export function SubmitGamePage() {
                 type="url"
                 value={draft.trailer_url}
                 onChange={(e) => setDraft({ ...draft, trailer_url: e.target.value })}
+                aria-invalid={Boolean(errors.trailer_url)}
+                aria-describedby={errors.trailer_url ? 'err-trailer' : undefined}
                 placeholder="https://www.youtube.com/watch?v=..."
                 className="mt-1.5 min-h-[42px] w-full rounded-lg border border-[#2E2E42] bg-[#09090D] px-3.5 text-sm text-white placeholder-[#8E8EA6]"
               />
               {errors.trailer_url && (
-                <p className="mt-1.5 text-xs text-[#FB7185]">{errors.trailer_url}</p>
+                <p id="err-trailer" className="mt-1.5 text-xs text-[#FB7185]">
+                  {errors.trailer_url}
+                </p>
               )}
             </div>
 
@@ -380,11 +393,15 @@ export function SubmitGamePage() {
                 type="url"
                 value={draft.cover_image_url}
                 onChange={(e) => setDraft({ ...draft, cover_image_url: e.target.value })}
+                aria-invalid={Boolean(errors.cover_image_url)}
+                aria-describedby={errors.cover_image_url ? 'err-cover' : undefined}
                 placeholder="https://..."
                 className="mt-1.5 min-h-[42px] w-full rounded-lg border border-[#2E2E42] bg-[#09090D] px-3.5 text-sm text-white placeholder-[#8E8EA6]"
               />
               {errors.cover_image_url && (
-                <p className="mt-1.5 text-xs text-[#FB7185]">{errors.cover_image_url}</p>
+                <p id="err-cover" className="mt-1.5 text-xs text-[#FB7185]">
+                  {errors.cover_image_url}
+                </p>
               )}
             </div>
           </div>
@@ -497,6 +514,8 @@ export function SubmitGamePage() {
               type="checkbox"
               checked={draft.rights_confirmed}
               onChange={(e) => setDraft({ ...draft, rights_confirmed: e.target.checked })}
+              aria-invalid={Boolean(errors.rights_confirmed)}
+              aria-describedby={errors.rights_confirmed ? 'err-rights' : undefined}
               className="mt-1 h-4 w-4 accent-[#7C3AED]"
             />
             <span className="text-sm leading-relaxed text-[#D6D6E4]">
@@ -506,7 +525,9 @@ export function SubmitGamePage() {
             </span>
           </label>
           {errors.rights_confirmed && (
-            <p className="mt-2 text-xs text-[#FB7185]">{errors.rights_confirmed}</p>
+            <p id="err-rights" className="mt-2 text-xs text-[#FB7185]">
+              {errors.rights_confirmed}
+            </p>
           )}
 
           <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-[#242433] pt-5">

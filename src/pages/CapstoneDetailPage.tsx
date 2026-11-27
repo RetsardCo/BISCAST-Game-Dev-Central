@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowUpRight, ExternalLink, Gamepad2 } from 'lucide-react';
 import { usePrototypeStore } from '../context/PrototypeStoreContext';
 import { CAPSTONE_STATUS_LABELS, CREDIT_ROLE_LABELS, formatUtcDate } from '../lib/formatters';
-import { isSafeHttpUrl } from '../lib/urlSafety';
+import { isStrictHttpsUrl } from '../lib/urlSafety';
 import { ButtonLink } from '../components/ui/Button';
 import { MediaImage } from '../components/ui/MediaImage';
 import { StatusText, getGameStatusTone } from '../components/ui/StatusText';
@@ -156,7 +156,7 @@ export function CapstoneDetailPage() {
             </dl>
 
             <div className="mt-6 space-y-2.5 border-t border-[#242433] pt-5">
-              {isSafeHttpUrl(capstone.demo_url) && (
+              {isStrictHttpsUrl(capstone.demo_url) && (
                 <a
                   href={capstone.demo_url!}
                   target="_blank"
@@ -167,7 +167,7 @@ export function CapstoneDetailPage() {
                   <ExternalLink className="h-4 w-4" aria-hidden="true" />
                 </a>
               )}
-              {isSafeHttpUrl(capstone.documentation_url) && (
+              {isStrictHttpsUrl(capstone.documentation_url) && (
                 <a
                   href={capstone.documentation_url!}
                   target="_blank"

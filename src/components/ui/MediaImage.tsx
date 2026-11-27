@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Gamepad2 } from 'lucide-react';
 import { isSafeImageUrl } from '../../lib/urlSafety';
 
@@ -9,6 +9,17 @@ export interface MediaImageProps {
   aspectClass?: string;
   className?: string;
   priority?: boolean;
+}
+
+/**
+ * Determines whether the currently supplied image source matches the previously failed source.
+ * Matching against the active src prevents stale error states when src changes on reused instances.
+ */
+export function isMediaImageFailed(
+  src: string | null | undefined,
+  failedSrc: string | null
+): boolean {
+  return Boolean(src && failedSrc !== null && failedSrc === src);
 }
 
 /**
@@ -23,8 +34,14 @@ export function MediaImage({
   className = '',
   priority = false,
 }: MediaImageProps) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFailedSrc(null);
+  }, [src]);
+
   const isSourceSafe = src ? isSafeImageUrl(src) : false;
+  const failed = isMediaImageFailed(src, failedSrc);
   const showFallback = !src || !isSourceSafe || failed;
 
   return (
@@ -43,11 +60,12 @@ export function MediaImage({
         </div>
       ) : (
         <img
+          key={src}
           src={src}
           alt={alt}
           loading={priority ? 'eager' : 'lazy'}
           referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
+          onError={() => setFailedSrc(src ?? null)}
           className="h-full w-full scale-[1.06] object-cover transition-transform duration-300 group-hover:scale-[1.09]"
         />
       )}

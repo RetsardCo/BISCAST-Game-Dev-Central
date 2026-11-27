@@ -7,7 +7,7 @@ import {
   AWARD_CATEGORY_LABELS,
   CREDIT_ROLE_LABELS,
 } from '../lib/formatters';
-import { isSafeHttpUrl } from '../lib/urlSafety';
+import { isStrictHttpsUrl } from '../lib/urlSafety';
 import { ButtonLink } from '../components/ui/Button';
 import { GameCard } from '../components/ui/GameCard';
 import { EmptyState } from '../components/ui/States';
@@ -128,7 +128,7 @@ export function DeveloperProfilePage() {
           {profile.portfolio_links.length > 0 && (
             <div className="flex flex-wrap gap-2 shrink-0">
               {profile.portfolio_links
-                .filter((link) => isSafeHttpUrl(link.url))
+                .filter((link) => isStrictHttpsUrl(link.url))
                 .map((link) => (
                   <a
                     key={link.label}

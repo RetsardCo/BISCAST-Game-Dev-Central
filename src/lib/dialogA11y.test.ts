@@ -1,52 +1,185 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
+import { Dialog } from '../components/ui/Dialog';
 import {
-  calculateNextTrapFocus,
   FOCUSABLE_SELECTOR,
+  getFocusableElements,
   getNextTrappedElement,
+  handleDialogKeyDown,
+  setupDialogFocusAndScrollLock,
 } from './dialogFocus';
 
-/**
- * Test suite validating Dialog focus trap and accessibility contracts (DEF-12).
- * Verifies tab wrapping, escape triggering, and ARIA attribute associations.
- */
-
-test('dialog accessibility: focus trap wraps backward and forward', () => {
-  const elements = ['btn-close', 'input-reason', 'btn-cancel', 'btn-submit'];
-  const containerId = 'dialog-container';
-
-  // Forward Tab on last element wraps to first element
-  assert.equal(calculateNextTrapFocus(elements, 'btn-submit', false, containerId), 'btn-close');
-
-  // Shift+Tab on first element wraps to last element
-  assert.equal(calculateNextTrapFocus(elements, 'btn-close', true, containerId), 'btn-submit');
-
-  // Shift+Tab when focus is on dialog container/backdrop wraps to last element
-  assert.equal(calculateNextTrapFocus(elements, containerId, true, containerId), 'btn-submit');
-  assert.equal(calculateNextTrapFocus(elements, null, true, containerId), 'btn-submit');
-
-  // Forward Tab when focus is on dialog container moves to first element
-  assert.equal(calculateNextTrapFocus(elements, containerId, false, containerId), 'btn-close');
-  assert.equal(calculateNextTrapFocus(elements, null, false, containerId), 'btn-close');
-
-  // Forward/Shift+Tab when focus is outside the dialog completely
-  assert.equal(calculateNextTrapFocus(elements, 'outside-body-button', false, containerId), 'btn-close');
-  assert.equal(calculateNextTrapFocus(elements, 'outside-body-button', true, containerId), 'btn-submit');
-
-  // Normal intermediate navigation
-  assert.equal(calculateNextTrapFocus(elements, 'btn-close', false, containerId), 'input-reason');
-  assert.equal(calculateNextTrapFocus(elements, 'btn-submit', true, containerId), 'btn-cancel');
-
-  // Single focusable element: Tab and Shift+Tab both keep focus on that element
-  assert.equal(calculateNextTrapFocus(['btn-close'], 'btn-close', false, containerId), 'btn-close');
-  assert.equal(calculateNextTrapFocus(['btn-close'], 'btn-close', true, containerId), 'btn-close');
-
-  // Empty focusable list returns container ID (prevents unhandled errors / tab escape)
-  assert.equal(calculateNextTrapFocus([], null, false, containerId), containerId);
-  assert.equal(calculateNextTrapFocus([], null, true, containerId), containerId);
+registerHooks({
+  load(url, context, nextLoad) {
+    if (/\.(jpe?g|png|webp|svg|gif|avif|ico)$/i.test(url)) {
+      return {
+        format: 'module',
+        shortCircuit: true,
+        source: 'export default "/assets/sample.jpg";',
+      };
+    }
+    return nextLoad(url, context);
+  },
 });
 
-test('dialog accessibility: DOM node getNextTrappedElement traps focus', () => {
+/**
+ * Test suite validating real Dialog component rendering, focus trap handlers,
+ * computed-style focusable visibility filtering, scroll-lock lifecycle, and
+ * SubmitGamePage accessibility wiring (DEF-12 & NEW-04).
+ */
+
+test('Dialog component renders role="dialog", aria-modal, matching aria-labelledby/describedby, and omits DOM when closed', () => {
+  const closedMarkup = renderToStaticMarkup(
+    React.createElement(Dialog, {
+      open: false,
+      onClose: () => {},
+      title: 'Hidden Modal',
+      description: 'Should not render',
+      children: React.createElement('button', { type: 'button' }, 'Action'),
+    })
+  );
+  assert.equal(closedMarkup, '');
+
+  const withDescMarkup = renderToStaticMarkup(
+    React.createElement(Dialog, {
+      open: true,
+      onClose: () => {},
+      title: 'Report Content Issue',
+      description: 'Reports remain in local browser memory only.',
+      children: React.createElement('button', { type: 'button' }, 'Submit'),
+    })
+  );
+  assert.ok(withDescMarkup.includes('role="dialog"'));
+  assert.ok(withDescMarkup.includes('aria-modal="true"'));
+  assert.ok(withDescMarkup.includes('tabindex="-1"') || withDescMarkup.includes('tabIndex="-1"'));
+  assert.ok(withDescMarkup.includes('aria-label="Close dialog"'));
+
+  const labelledByMatch = /aria-labelledby="([^"]+)"/.exec(withDescMarkup);
+  assert.ok(labelledByMatch, 'Dialog must define aria-labelledby');
+  assert.ok(
+    withDescMarkup.includes(`<h2 id="${labelledByMatch[1]}"`),
+    'Dialog heading id must match aria-labelledby'
+  );
+
+  const describedByMatch = /aria-describedby="([^"]+)"/.exec(withDescMarkup);
+  assert.ok(describedByMatch, 'Dialog with description must define aria-describedby');
+  assert.ok(
+    withDescMarkup.includes(`<p id="${describedByMatch[1]}"`),
+    'Dialog description id must match aria-describedby'
+  );
+
+  const withoutDescMarkup = renderToStaticMarkup(
+    React.createElement(Dialog, {
+      open: true,
+      onClose: () => {},
+      title: 'Screenshot Lightbox',
+      children: React.createElement('p', null, 'Preview image'),
+    })
+  );
+  assert.ok(/aria-labelledby="([^"]+)"/.test(withoutDescMarkup));
+  assert.equal(withoutDescMarkup.includes('aria-describedby='), false);
+});
+
+test('getFocusableElements filters by computed styles, ancestor hidden/inert attributes, and zero-size layout', () => {
+  interface MockElementSpec {
+    id: string;
+    hidden?: boolean;
+    ariaHidden?: string | null;
+    inert?: boolean;
+    hasHiddenAncestor?: boolean;
+    inlineDisplay?: string;
+    inlineVisibility?: string;
+    computedDisplay?: string;
+    computedVisibility?: string;
+    offsetParent?: object | null;
+    offsetWidth?: number;
+    offsetHeight?: number;
+  }
+
+  const makeMockElement = (spec: MockElementSpec) => {
+    const el = {
+      id: spec.id,
+      style: {
+        display: spec.inlineDisplay ?? '',
+        visibility: spec.inlineVisibility ?? '',
+      },
+      offsetParent: spec.offsetParent === undefined ? {} : spec.offsetParent,
+      offsetWidth: spec.offsetWidth ?? 100,
+      offsetHeight: spec.offsetHeight ?? 32,
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: () => ({
+            display: spec.computedDisplay ?? 'block',
+            visibility: spec.computedVisibility ?? 'visible',
+          }),
+        },
+      },
+      hasAttribute: (attr: string) =>
+        (attr === 'hidden' && Boolean(spec.hidden)) ||
+        (attr === 'inert' && Boolean(spec.inert)),
+      getAttribute: (attr: string) =>
+        attr === 'aria-hidden' ? (spec.ariaHidden ?? null) : null,
+      closest: (selector: string) =>
+        spec.hasHiddenAncestor && selector.includes('[hidden]') ? {} : null,
+    };
+    return el as unknown as HTMLElement;
+  };
+
+  const visibleBtn = makeMockElement({ id: 'visible-btn' });
+  const fixedVisibleBtn = makeMockElement({
+    id: 'fixed-visible-btn',
+    offsetParent: null,
+    offsetWidth: 80,
+    offsetHeight: 32,
+  });
+  const computedDisplayNoneBtn = makeMockElement({
+    id: 'computed-none-btn',
+    inlineDisplay: '',
+    computedDisplay: 'none',
+  });
+  const computedVisibilityHiddenBtn = makeMockElement({
+    id: 'computed-hidden-btn',
+    inlineVisibility: '',
+    computedVisibility: 'hidden',
+  });
+  const hiddenAttrBtn = makeMockElement({ id: 'hidden-attr-btn', hidden: true });
+  const ariaHiddenBtn = makeMockElement({ id: 'aria-hidden-btn', ariaHidden: 'true' });
+  const inertBtn = makeMockElement({ id: 'inert-btn', inert: true });
+  const ancestorHiddenBtn = makeMockElement({ id: 'ancestor-hidden-btn', hasHiddenAncestor: true });
+  const zeroSizeDetachedBtn = makeMockElement({
+    id: 'zero-size-btn',
+    offsetParent: null,
+    offsetWidth: 0,
+    offsetHeight: 0,
+  });
+
+  const container = {
+    querySelectorAll: () => [
+      visibleBtn,
+      fixedVisibleBtn,
+      computedDisplayNoneBtn,
+      computedVisibilityHiddenBtn,
+      hiddenAttrBtn,
+      ariaHiddenBtn,
+      inertBtn,
+      ancestorHiddenBtn,
+      zeroSizeDetachedBtn,
+    ],
+  } as unknown as HTMLElement;
+
+  const result = getFocusableElements(container);
+  assert.deepEqual(
+    result.map((el) => el.id),
+    ['visible-btn', 'fixed-visible-btn']
+  );
+  assert.deepEqual(getFocusableElements(null), []);
+});
+
+test('getNextTrappedElement enforces forward, backward, outside, container, single, and empty boundaries', () => {
   const btnClose = { id: 'btn-close' } as HTMLElement;
   const input = { id: 'input' } as HTMLElement;
   const btnSubmit = { id: 'btn-submit' } as HTMLElement;
@@ -59,95 +192,218 @@ test('dialog accessibility: DOM node getNextTrappedElement traps focus', () => {
 
   const outsideNode = { id: 'outside-node' } as HTMLElement;
 
-  // Last element with forward Tab -> wraps to first
-  const forwardWrap = getNextTrappedElement([btnClose, input, btnSubmit], btnSubmit, false, container);
-  assert.equal(forwardWrap, btnClose);
+  assert.equal(getNextTrappedElement(children, btnSubmit, false, container), btnClose);
+  assert.equal(getNextTrappedElement(children, btnClose, true, container), btnSubmit);
+  assert.equal(getNextTrappedElement(children, container, false, container), btnClose);
+  assert.equal(getNextTrappedElement(children, container, true, container), btnSubmit);
+  assert.equal(getNextTrappedElement(children, outsideNode, false, container), btnClose);
+  assert.equal(getNextTrappedElement(children, outsideNode, true, container), btnSubmit);
+  assert.equal(getNextTrappedElement(children, null, false, container), btnClose);
+  assert.equal(getNextTrappedElement(children, null, true, container), btnSubmit);
+  assert.equal(getNextTrappedElement(children, btnClose, false, container), null);
 
-  // First element with Shift+Tab -> wraps to last
-  const backwardWrap = getNextTrappedElement([btnClose, input, btnSubmit], btnClose, true, container);
-  assert.equal(backwardWrap, btnSubmit);
+  // Single focusable element wraps back to itself in both directions
+  assert.equal(getNextTrappedElement([btnClose], btnClose, false, container), btnClose);
+  assert.equal(getNextTrappedElement([btnClose], btnClose, true, container), btnClose);
 
-  // Focus on container with forward Tab -> goes to first
-  const containerForward = getNextTrappedElement([btnClose, input, btnSubmit], container, false, container);
-  assert.equal(containerForward, btnClose);
-
-  // Focus on container with Shift+Tab -> goes to last
-  const containerBackward = getNextTrappedElement([btnClose, input, btnSubmit], container, true, container);
-  assert.equal(containerBackward, btnSubmit);
-
-  // Focus outside container with forward Tab -> trapped to first
-  const outsideForward = getNextTrappedElement([btnClose, input, btnSubmit], outsideNode, false, container);
-  assert.equal(outsideForward, btnClose);
-
-  // Focus outside container with Shift+Tab -> trapped to last
-  const outsideBackward = getNextTrappedElement([btnClose, input, btnSubmit], outsideNode, true, container);
-  assert.equal(outsideBackward, btnSubmit);
-
-  // Intermediate element -> returns null so native browser Tab proceeds
-  const intermediate = getNextTrappedElement([btnClose, input, btnSubmit], btnClose, false, container);
-  assert.equal(intermediate, null);
+  // Empty focusables list targets container itself
+  assert.equal(getNextTrappedElement([], null, false, container), container);
+  assert.equal(getNextTrappedElement([], null, true, container), container);
 });
 
-test('dialog accessibility: FOCUSABLE_SELECTOR excludes hidden inputs and aria-hidden elements', () => {
+test('handleDialogKeyDown handles Escape, Tab/Shift+Tab wrapping, intermediate Tab, and zero-focusables', () => {
+  const focusCalls: string[] = [];
+  const makeFocusable = (id: string) =>
+    ({
+      id,
+      style: { display: '', visibility: '' },
+      hasAttribute: () => false,
+      getAttribute: () => null,
+      focus: () => {
+        focusCalls.push(id);
+      },
+    }) as unknown as HTMLElement;
+
+  const first = makeFocusable('first');
+  const middle = makeFocusable('middle');
+  const last = makeFocusable('last');
+  let items = [first, middle, last];
+
+  const dialogEl = {
+    id: 'dialog-root',
+    focus: () => {
+      focusCalls.push('dialog-root');
+    },
+    contains: (target: unknown) => items.includes(target as HTMLElement) || target === dialogEl,
+    querySelectorAll: () => items,
+  } as unknown as HTMLElement;
+
+  let closedCount = 0;
+  let preventedCount = 0;
+  const createKeyEvent = (key: string, shiftKey = false) => ({
+    key,
+    shiftKey,
+    preventDefault: () => {
+      preventedCount += 1;
+    },
+  });
+
+  // Non-navigation key is ignored
+  assert.equal(
+    handleDialogKeyDown(createKeyEvent('Enter'), dialogEl, () => {
+      closedCount += 1;
+    }),
+    false
+  );
+  assert.equal(closedCount, 0);
+  assert.equal(preventedCount, 0);
+
+  // Escape prevents default and calls onClose
+  assert.equal(
+    handleDialogKeyDown(createKeyEvent('Escape'), dialogEl, () => {
+      closedCount += 1;
+    }),
+    true
+  );
+  assert.equal(closedCount, 1);
+  assert.equal(preventedCount, 1);
+
+  // Forward Tab on last element wraps to first
+  assert.equal(
+    handleDialogKeyDown(createKeyEvent('Tab', false), dialogEl, () => {}, last),
+    true
+  );
+  assert.deepEqual(focusCalls, ['first']);
+  assert.equal(preventedCount, 2);
+
+  // Backward Shift+Tab on first element wraps to last
+  assert.equal(
+    handleDialogKeyDown(createKeyEvent('Tab', true), dialogEl, () => {}, first),
+    true
+  );
+  assert.deepEqual(focusCalls, ['first', 'last']);
+  assert.equal(preventedCount, 3);
+
+  // Intermediate Tab allows browser native traversal
+  assert.equal(
+    handleDialogKeyDown(createKeyEvent('Tab', false), dialogEl, () => {}, first),
+    false
+  );
+  assert.equal(preventedCount, 3);
+
+  // Zero focusables falls back to dialog container
+  items = [];
+  assert.equal(
+    handleDialogKeyDown(createKeyEvent('Tab', false), dialogEl, () => {}, dialogEl),
+    true
+  );
+  assert.deepEqual(focusCalls, ['first', 'last', 'dialog-root']);
+  assert.equal(preventedCount, 4);
+});
+
+test('setupDialogFocusAndScrollLock locks scroll, moves initial focus, and restores trigger focus safely', () => {
+  const focusLog: string[] = [];
+  const triggerBtn = {
+    id: 'trigger-btn',
+    focus: () => focusLog.push('trigger-btn'),
+  } as unknown as HTMLElement;
+  const closeBtn = {
+    id: 'close-btn',
+    style: { display: '', visibility: '' },
+    hasAttribute: () => false,
+    getAttribute: () => null,
+    focus: () => focusLog.push('close-btn'),
+  } as unknown as HTMLElement;
+
+  let focusables = [closeBtn];
+  const dialogEl = {
+    id: 'dialog-root',
+    focus: () => focusLog.push('dialog-root'),
+    querySelectorAll: () => focusables,
+  } as unknown as HTMLElement;
+
+  let triggerContained = true;
+  const mockDoc = {
+    activeElement: triggerBtn,
+    body: { style: { overflow: 'auto' } },
+    contains: (el: unknown) => (el === triggerBtn ? triggerContained : false),
+  } as unknown as Document;
+
+  const rafState: { cb: FrameRequestCallback | null; canceledId: number | null } = {
+    cb: null,
+    canceledId: null,
+  };
+
+  const cleanup = setupDialogFocusAndScrollLock(
+    { current: dialogEl },
+    mockDoc,
+    (cb) => {
+      rafState.cb = cb;
+      return 42;
+    },
+    (id) => {
+      rafState.canceledId = id;
+    }
+  );
+
+  assert.equal(mockDoc.body.style.overflow, 'hidden');
+  assert.ok(rafState.cb !== null);
+  rafState.cb(0);
+  assert.deepEqual(focusLog, ['close-btn']);
+
+  cleanup();
+  assert.equal(rafState.canceledId, 42);
+  assert.equal(mockDoc.body.style.overflow, 'auto');
+  assert.deepEqual(focusLog, ['close-btn', 'trigger-btn']);
+
+  // Zero focusables falls back to dialog container and skips detached trigger restoration
+  focusables = [];
+  triggerContained = false;
+  focusLog.length = 0;
+
+  const cleanupDetached = setupDialogFocusAndScrollLock(
+    { current: dialogEl },
+    mockDoc,
+    (cb) => {
+      cb(0);
+      return 77;
+    },
+    () => {}
+  );
+  assert.deepEqual(focusLog, ['dialog-root']);
+  cleanupDetached();
+  assert.deepEqual(focusLog, ['dialog-root']);
+});
+
+test('FOCUSABLE_SELECTOR excludes hidden inputs, disabled controls, and aria-hidden elements', () => {
   assert.ok(FOCUSABLE_SELECTOR.includes('button:not([disabled])'));
   assert.ok(FOCUSABLE_SELECTOR.includes('input:not([type="hidden"])'));
   assert.ok(FOCUSABLE_SELECTOR.includes('[tabindex]:not([tabindex="-1"])'));
   assert.ok(FOCUSABLE_SELECTOR.includes(':not([aria-hidden="true"])'));
 });
 
-test('dialog accessibility: escape key triggers close callback', () => {
-  let closed = false;
-  const onClose = () => {
-    closed = true;
-  };
+test('NEW-04 regression: SubmitGamePage wires aria-invalid on all validated inputs including sub-cover', async () => {
+  const { PrototypeStoreProvider } = await import('../context/PrototypeStoreContext');
+  const { SubmitGamePage } = await import('../pages/SubmitGamePage');
 
-  const simulateKeyDown = (key: string, handler: (e: { key: string; defaultPrevented: boolean; preventDefault: () => void }) => void) => {
-    let prevented = false;
-    handler({
-      key,
-      defaultPrevented: prevented,
-      preventDefault: () => {
-        prevented = true;
-      },
-    });
-  };
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      MemoryRouter,
+      null,
+      React.createElement(
+        PrototypeStoreProvider,
+        null,
+        React.createElement(SubmitGamePage)
+      )
+    )
+  );
 
-  const dialogKeyHandler = (e: { key: string; defaultPrevented: boolean; preventDefault: () => void }) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      onClose();
-    }
-  };
-
-  simulateKeyDown('Enter', dialogKeyHandler);
-  assert.equal(closed, false);
-
-  simulateKeyDown('Escape', dialogKeyHandler);
-  assert.equal(closed, true);
-});
-
-test('dialog accessibility: ARIA associations and semantics', () => {
-  const titleId = ':r1:';
-  const descId = ':r2:';
-  const hasDescription = true;
-
-  const ariaAttributes = {
-    role: 'dialog',
-    'aria-modal': 'true',
-    'aria-labelledby': titleId,
-    'aria-describedby': hasDescription ? descId : undefined,
-  };
-
-  assert.equal(ariaAttributes.role, 'dialog');
-  assert.equal(ariaAttributes['aria-modal'], 'true');
-  assert.equal(ariaAttributes['aria-labelledby'], ':r1:');
-  assert.equal(ariaAttributes['aria-describedby'], ':r2:');
-
-  const withoutDesc = {
-    role: 'dialog',
-    'aria-modal': 'true',
-    'aria-labelledby': titleId,
-    'aria-describedby': false ? descId : undefined,
-  };
-  assert.equal(withoutDesc['aria-describedby'], undefined);
+  for (const fieldId of ['sub-title', 'sub-short', 'sub-desc', 'sub-year', 'sub-itch', 'sub-trailer', 'sub-cover', 'sub-rights']) {
+    const tagMatch = new RegExp(`<[^>]*id="${fieldId}"[^>]*>`).exec(markup);
+    assert.ok(tagMatch, `Expected form field #${fieldId} in SubmitGamePage markup`);
+    assert.ok(
+      tagMatch[0].includes('aria-invalid="false"'),
+      `Field #${fieldId} must expose aria-invalid attribute (found: ${tagMatch[0]})`
+    );
+  }
 });
